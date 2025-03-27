@@ -1,4 +1,5 @@
-These are files of Supplemental Material.
+These are files of the Supplemental Material.
+
 Supp.pdf: describes the algorithms used to construct designs, gives the designs obtained for the examples in the paper and their efficiencies and gives a brief sensitivity study to explore the dependence on weights.
 
 designs.zip: designs for all examples in CSV.
