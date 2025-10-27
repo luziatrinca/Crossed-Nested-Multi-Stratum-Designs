@@ -1,4 +1,4 @@
-These are files of the Supplemental Material of "Response Surface Designs for General Crossed and Nested Multi-Stratum Structures".
+These are files of the Supplemental Material of "Response Surface Designs for General Crossed and Nested Multi-Stratum Structures" by Luzia Trinca and Steven Gilmour.
 
 Supp.pdf: describes the algorithms used to construct designs, gives the formulae for DF calculations, gives a brief sensitivity study to explore the dependence on weights and gives the designs obtained for the examples in the paper and their efficiencies.
 
