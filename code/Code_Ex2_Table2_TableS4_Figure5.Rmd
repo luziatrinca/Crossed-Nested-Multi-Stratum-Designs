@@ -1,0 +1,269 @@
+---
+title: "Reproduction of Results for Example 2"
+author: ""
+date: ""
+output:
+  pdf_document:
+    keep_tex: true
+    fig_caption: true
+header-includes:
+  - \usepackage{caption}
+  - \usepackage{amsmath}
+  - \usepackage{graphicx}
+  - \usepackage{enumitem}
+  - \DeclareCaptionLabelFormat{S}{Table~S#2}
+---
+
+```{r setup, include=FALSE, echo=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=F}
+# Function to assign labels to treatments
+# Function to assign labels to treatments
+TreatLabels <- function(X, N) {
+  # Create a hash for each row
+  hashes <- apply(X, 1, function(row) digest(row, algo = "xxhash64"))
+  # Assign unique labels based on hash
+  Treat <- as.numeric(factor(hashes))
+  # Combine labels with original data
+  Treat <- cbind(Treat, X)
+  list(Treat = Treat)
+}
+
+# Function for DF breakdown
+anovaDF <- function(design, design.Z, Z1, Z2, Npar, Npar.Runs)
+{
+  N <- nrow(design)
+  design <- design[,-c(1,3)]
+  # Full treatment factor
+  design.Z$Treat <- factor(TreatLabels(design,N)$Treat[,1])
+  T  <- model.matrix(~-1+Treat, data=design.Z)
+  N_Treat.Full <- rankMatrix(T)[1]-1 # nlevels(design.Z$Treat)
+  
+  # Days
+  total.Day <- nlevels(design.Z$Day)-1
+  DF_Treat.Day <- nlevels(factor(TreatLabels(design[,1],N)$Treat[,1]))-1
+  PE.Day <- rankMatrix(cbind(T,Z1,Z2))[1]-rankMatrix(cbind(T,Z2))[1]
+  LOF.Day <- DF_Treat.Day-(Npar-Npar.Runs)
+  LOF.Day.Treat_in_Runs <- total.Day-(PE.Day+LOF.Day+DF_Treat.Day)
+  
+  # Times
+  total.Period <- nlevels(design.Z$Period)-1
+  PE.Period <- rankMatrix(cbind(T,Z1,Z2))[1]-rankMatrix(cbind(T,Z1))[1]
+  LOF.Period.Treat_in_Runs <- total.Period-PE.Period
+  
+ 
+  # Days*Periods: Runs
+  B <- cbind(Z1,Z2)
+  F <- cbind(B,T)
+  DF_Treat.Runs <- rankMatrix(F)[1] - rankMatrix(B)[1]
+  PE.Runs <- N - rankMatrix(F)[1]
+  LOF.Runs <- DF_Treat.Runs-Npar.Runs
+
+  # DF_Treat as sum
+  df_Treat.Full=(DF_Treat.Runs+DF_Treat.Day+LOF.Day.Treat_in_Runs+
+                       LOF.Period.Treat_in_Runs)
+  
+  
+  # Equivalent with anova to extract overall DF for Treatments and for PE in Day
+  # y <- rnorm(N)    # dummy response
+  # a1 <- anova(lm(y~Treat+Period+Day, data=design.Z)) 
+  # df_Treat.Days=ifelse("Day" %in% rownames(a1), a1[rownames(a1)=="Day",1], 0)
+  # df_Treat.Runs=a1[rownames(a1)=="Residuals",1]
+  # 
+  #  # Anova to extract overall DF for Treatments and for PE in Time
+  # a2 <- anova(lm(y~Treat+Day+Period, data=design.Z))
+  # df_Treat.Time=ifelse("Period" %in% rownames(a2), a2[rownames(a2)=="Period",1], 0)
+  
+  df <- c(DF_Treat.Day=DF_Treat.Day,Npar.Day=Npar-Npar.Runs,LOF.Day=LOF.Day,
+          LOF.Day.Treat_in_Runs=LOF.Day.Treat_in_Runs,PE.Day=PE.Day, 
+          total.Day=total.Day,
+          LOF.Period.Treat_in_Runs=LOF.Period.Treat_in_Runs,
+          PE.Period=PE.Period,total.Period=total.Period,
+          DF_Treat.Runs=DF_Treat.Runs, Npar.Runs=Npar.Runs,
+          LOF.Runs=LOF.Runs, PE.Runs=PE.Runs,
+          total.Runs=N-(total.Day+total.Period+1),
+          total=N-1, N_Treat.Full=N_Treat.Full, df_Treat.Full=df_Treat.Full
+          )
+  return(df)
+}
+
+# Function to calculate D_S and A_S values for given variance component ratios
+efficiencyAD <- function(design, K, Z1, Z2, model, Npar, sigma)
+{
+  W <- rep(1,Npar)
+  W[(K+1):(2*K)] <- 0.25
+  W <- W/sum(W)
+  design <- as.data.frame(design)
+  design <- design[,-c(1,3)]
+  res <- numeric(0)
+  for(i in 1:nrow(sigma)){
+    sig <- sigma[i,]
+    V <- diag(rep(1,N))+sig[1]*(Z1%*%t(Z1))+sig[2]*Z2%*%t(Z2)
+    X <- model.matrix(model, data=design, keep.order=TRUE)
+    Vi <- solve(V)
+    V <- solve(t(X)%*%Vi%*%X) # 
+    d <- exp(sum(log(round(eigen(V[-1,-1], symmetric=TRUE, 
+                                 only.values=TRUE)$values, 6)))/Npar)
+    
+    v <- sum(W*matrix(diag(V)[-1],nc=1))/sum(W)
+    res <- rbind(res,c(d,v))
+  }
+  colnames(res) <- c("D", "A")
+  return(res)
+}
+```
+
+```{r echo=FALSE}
+K <- 5   # Total number of factors
+m1 <- 26 # Days
+m2 <- 2 # Times
+b <- m1*m2
+bsize <- 1
+design.Z <- data.frame(Day=factor(rep(1:m1, rep(m2*bsize,m1))), 
+                       Period=factor(rep(rep(1:m2,rep(bsize,m2)),m1)))
+Z1 <- model.matrix(~-1+Day, data=design.Z)
+Z2 <- model.matrix(~-1+Period, data=design.Z) 
+N <- b*bsize
+# Approximating model in all strata
+model <- formula(~ X1+X2+X3+X4+X5+I(X1^2)+I(X2^2)+I(X3^2)+I(X4^2)+I(X5^2)+
+                   X1:X2+X1:X3+X1:X4+X1:X5+X2:X3+X2:X4+X2:X5+X3:X4+
+                   X3:X5+X4:X5)
+Npar <- length(attr(terms(model), "term.labels")) 
+
+model2 <- formula(~ X2+X3+X4+X5+I(X2^2)+I(X3^2)+I(X4^2)+I(X5^2)+X1:X2+
+                   X1:X3+X1:X4+X1:X5+X2:X3+X2:X4+X2:X5+X3:X4+X3:X5+X4:X5)
+Npar.Runs <- length(attr(terms(model2), "term.labels")) 
+```
+
+
+```{r echo=FALSE}
+library(Matrix)
+library(readr)
+library(dplyr, warn.conflicts = FALSE)
+library(digest)
+jmp <- read_delim("EX2_JMP.csv", show_col_types = FALSE)
+df_jmp <- suppressWarnings(anovaDF(jmp, design.Z, Z1, Z2, Npar, Npar.Runs))
+D <- read_delim("EX2_MSSD.csv", show_col_types = FALSE)
+df_D <- suppressWarnings(anovaDF(D, design.Z, Z1, Z2, Npar, Npar.Runs))
+DP <- read_delim("EX2_MSSDP.csv", show_col_types = FALSE)
+df_DP <- suppressWarnings(anovaDF(DP, design.Z, Z1, Z2, Npar, Npar.Runs))
+CP <- read_delim("EX2_MSSCP.csv", show_col_types = FALSE)
+df_CP <- suppressWarnings(anovaDF(CP, design.Z, Z1, Z2, Npar, Npar.Runs))
+CP2 <- read_delim("EX2_CP2017.csv", show_col_types = FALSE)
+df_CP2 <- suppressWarnings(anovaDF(CP2, design.Z, Z1, Z2, Npar, Npar.Runs))
+```
+\setcounter{table}{1}
+```{r, results='asis', echo=FALSE}
+# results
+source <- data.frame(names(df_jmp))
+tab <- data.frame(t(rbind(df_jmp, df_D, df_DP, df_CP, df_CP2)))
+row.names(tab) <- NULL
+tab <- cbind(source, tab)[-((nrow(tab)-1):nrow(tab)),]
+
+library(xtable)
+xtable_tab1 <- xtable(tab, digits=0, caption="Skeleton ANOVA of designs for Example 2")
+colnames(xtable_tab1) <- c("Source", "D*", "MSSD", "MSSDP", "MSSCP", "CP")
+print(xtable_tab1, caption.placement = "top", 
+      sanitize.colnames.function = identity,
+      hline.after = c(-1, 0, 6, 9, 14, 15), include.rownames = FALSE, 
+      comment = FALSE)
+```
+\setcounter{table}{3}
+\captionsetup[table]{labelformat=S}
+```{r, results='asis', echo=FALSE}
+# Efficiencies 
+sig <- scan(text="1 10 100",what=double())
+Sigma <- expand.grid(sig, sig)
+Sigma <- Sigma[order(Sigma[,1],Sigma[,2]),]
+sigma <- as.matrix(Sigma)
+colnames(sigma) <- NULL
+eff.jmp <- efficiencyAD(jmp, K, Z1, Z2, model, Npar, sigma)
+eff.D <- efficiencyAD(D, K, Z1, Z2, model, Npar, sigma)
+eff.DP <- efficiencyAD(DP, K, Z1, Z2, model, Npar, sigma)
+eff.CP <- efficiencyAD(CP, K, Z1, Z2, model, Npar, sigma)
+eff.CP2 <- efficiencyAD(CP2, K, Z1, Z2, model, Npar, sigma)
+eff <- cbind(eff.jmp, eff.D, eff.DP, eff.CP, eff.CP2)
+even_indexes<- seq(2,ncol(eff),2)
+odd_indexes<- seq(1,ncol(eff),2)
+resA <- eff[,even_indexes]
+resD <- eff[,odd_indexes]
+effD <- round(100*matrix(rep(resD[,1],ncol(resD)),nc=ncol(resD))/resD,2)
+effD <- effD[,-1]
+effA <- round(100*matrix(rep(resA[,1],ncol(resA)),nc=ncol(resA))/resA,2)
+effA <- effA[,-1]
+tab <- cbind(Sigma,e1=NA, effD, e2=NA, effA)
+library(xtable)
+xtable_tabF <- xtable(tab, digits=c(0,0, 0, 0, 2, 2, 2, 2, 0, 2, 2, 2, 2),
+                      caption = "(Ds- and Aw-efficiencies, relative to the best fixed-effects D design obtained, given vc ratios, for designs for Example 2.")
+colnames(xtable_tabF) <- c("eta1", "eta2", "", "MSSD", "MSSDP", "MSSCP", 
+                           "CP","", "MSSD", "MSSDP", "MSSCP", "CP")
+print(xtable_tabF, caption.placement = "top", include.rownames = FALSE, 
+      comment = FALSE, add.to.row = list(pos = list(-1), 
+      command = c("\\multicolumn{2}{c}{}&&\\multicolumn{4}{c}{Ds}&&\\multicolumn{4}{c}{Aw} \\\\  \n")))
+```
+\setcounter{figure}{4}
+```{r, echo=FALSE, fig.cap="Ds and Aw efficiencies, relative to the D* design, as function of variance component ratios for designs for Example 2."}
+# Combine and filter data
+library(ggplot2)
+
+# Combine and filter data
+d1 <- data.frame(crit = "D", eta1 = Sigma[,1], eta2 = log10(Sigma[,2]),
+                 Design = factor(rep(c("MSSD", "MSSDP", "MSSCP", "CP"),
+                                     rep(9, 4))), eff = c(effD))
+d2 <- data.frame(crit = "A", eta1 = Sigma[,1], eta2 = log10(Sigma[,2]),
+                 Design = factor(rep(c("MSSD", "MSSDP", "MSSCP", "CP"),
+                                     rep(9, 4))), eff = c(effA))
+d <- rbind(d1, d2)
+
+# Set factor levels to control legend order
+d$crit <- factor(d$crit, levels = c("D", "A"),
+                 labels = c(expression(paste(D[S])),
+                            expression(paste(A[w]))))
+
+d$Design <- factor(d$Design, levels = c("MSSD", "MSSDP", "MSSCP", "CP"))
+
+
+custom_colors <- c("MSSD" = "green", "MSSDP" = "pink", "MSSCP" = "black", "CP"="#1F75FB")
+custom_shapes <- c("MSSD" = 8, "MSSDP" = 15, "MSSCP" = 19, "CP"=17)
+
+labels <- c("MSSD" = expression(MSS[D[S]]),
+            "MSSDP" = expression(MSS[paste("(", DP, ")"[S])]),
+            "MSSCP" = expression(MSS[CP[kappa]]),
+            "CP"=expression(CP))
+
+p <- ggplot(d, aes(log10(eta1), eff, group = interaction(eta2, Design), color = Design, shape=Design, linetype = factor(eta2))) + 
+  facet_wrap(~crit, labeller = label_parsed) + 
+  geom_point(size=2.5) +
+  geom_line() + 
+  scale_shape_manual(values = custom_shapes, labels = labels) +
+  scale_color_manual(values = custom_colors, labels = labels) +
+  labs(title = "", x = expression(log[10](eta[Days])), y = "Efficiency") + 
+  scale_x_continuous(breaks = unique(log10(d$eta1))) + 
+  guides(color = guide_legend(title = "Design: ", order=1), 
+         shape = guide_legend(title = "Design: ", order=1),
+  linetype = guide_legend(title = expression(log[10](eta[Periods])*": ")), order=2) + 
+  theme(axis.line = element_line(colour = "black"), panel.background = element_blank(), 
+        legend.key = element_rect(fill = "transparent", color = NA),
+        strip.background = element_rect(colour = NA, fill = NA),
+        plot.background = element_rect(fill = NA, color = NA),
+        legend.background = element_rect(fill = "transparent", color = NA),
+        legend.box.background = element_rect(fill = "transparent", 
+                                             color = NA),
+        axis.title.x = element_text(size = 14),
+        axis.title.y = element_text(size = 14),
+        axis.text = element_text(size = 14),
+        legend.text = element_text(size = 16),
+        legend.title = element_text(size = 16),
+        strip.text = element_text(size = 16),
+        legend.key.size = unit(1.5, "lines"),
+        legend.spacing.x = unit(1, "cm"),
+        legend.position = "bottom"
+  )
+p
+```
+
+
+
+

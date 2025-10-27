@@ -1,0 +1,285 @@
+---
+title: "Reproduction of Results for Example 3"
+author: "Read design D* from csv provided and all others are RData produced after uning the Main Code"
+date: ""
+output:
+  pdf_document:
+    keep_tex: true
+    fig_caption: true
+header-includes:
+  - \usepackage{caption}
+  - \usepackage{amsmath}
+  - \usepackage{graphicx}
+  - \usepackage{enumitem}
+  - \DeclareCaptionLabelFormat{S}{Table~S#2}
+---
+
+```{r setup, include=TRUE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=F}
+# Function to assign labels to treatments
+TreatLabels <- function(X, N) {
+  # Create a hash for each row
+  hashes <- apply(X, 1, function(row) digest(row, algo = "xxhash64"))
+  # Assign unique labels based on hash
+  Treat <- as.numeric(factor(hashes))
+  # Combine labels with original data
+  Treat <- cbind(Treat, X)
+  list(Treat = Treat)
+}
+
+# Function for DF breakdown
+anovaDF <- function(design, design.Z, Z1, Z2, Z3, Npar, Npar.Runs)
+{
+  N <- nrow(design)
+  
+  # Full treatment factor
+  design.Z$Treat <- factor(TreatLabels(design,N)$Treat[,1])
+  T  <- model.matrix(~-1+Treat, data=design.Z)
+  N_Treat.Full <- rankMatrix(T)[1] # nlevels(design.Z$Treat)
+
+  # Ovens
+  total.Oven <- nlevels(design.Z$oven)-1
+  DF_Treat.Oven <- nlevels(factor(TreatLabels(design[,1:2],N)$Treat[,1]))-1
+  LOF.Oven <- DF_Treat.Oven-(Npar-Npar.Runs)
+  PE.Oven <- rankMatrix(cbind(T,Z1,Z2))[1]-rankMatrix(cbind(T,Z2))[1]
+  LOF.Oven.Treat_in_Runs <- total.Oven-DF_Treat.Oven-PE.Oven
+  
+  # Batch
+  total.Batch <- nlevels(design.Z$batch)-1
+  PE.Batch <- rankMatrix(cbind(T,Z1,Z2))[1]-rankMatrix(cbind(T,Z1))[1]
+  LOF.Batch.Treat_in_Runs <- total.Batch-PE.Batch
+  
+  # Oven*Batch
+  total.OvenBatch <- total.Oven*total.Batch
+  PE.OvenBatch <- rankMatrix(cbind(T,Z1,Z2,Z3))[1]-rankMatrix(cbind(T,Z1,Z2))[1]
+  LOF.OvenBatch.Treat_in_Runs <- total.OvenBatch-PE.OvenBatch
+  
+  # Runs
+  B <- cbind(Z1,Z2,Z3)
+  F <- cbind(B,T)
+  DF_Treat.Runs <- rankMatrix(F)[1] - rankMatrix(B)[1]
+  PE.Runs <- N - rankMatrix(F)[1]
+  LOF.Runs <- DF_Treat.Runs-Npar.Runs
+  # Equivalently, using anova
+  # y <- rnorm(N)    # dummy response
+  # a1 <- anova(lm(y~Treat+oven+batch+oven.batch, data=design.Z))
+  # df_PE.Runs=a1[row.names(a1)=="Residuals",1] 
+  # df_PE.OvenBatch <- ifelse("oven.batch" %in% row.names(a1), a1[row.names(a1)=="oven.batch",1],0)
+  # df_PE.Batch <- ifelse("batch" %in% row.names(a1), a1[row.names(a1)=="batch",1],0)
+  # a1 <- anova(lm(y~Treat+batch+oven+oven.batch, data=design.Z))
+  # df_PE.Oven <- ifelse("oven" %in% row.names(a1), a1[row.names(a1)=="oven",1],0)
+  
+  # df treat as sum
+  df_Treat.Full=(DF_Treat.Oven+DF_Treat.Runs+LOF.Oven.Treat_in_Runs+
+                   LOF.Batch.Treat_in_Runs+LOF.OvenBatch.Treat_in_Runs)
+  
+  df <- c(DF_Treat.Oven=DF_Treat.Oven, Npar.Oven=Npar-Npar.Runs, 
+          LOF.Oven=LOF.Oven,
+          LOF.Oven.Treat_in_Runs=LOF.Oven.Treat_in_Runs,
+          PE.Oven=PE.Oven, total.Oven=total.Oven,
+          LOF.Batch.Treat_in_Runs=LOF.Batch.Treat_in_Runs,
+          PE.Batch=PE.Batch,total.Batch=total.Batch,
+          LOF.OvenBatch.Treat_in_Runs=LOF.OvenBatch.Treat_in_Runs,
+          PE.OvenBatch=PE.OvenBatch, total.OvenBatch=total.OvenBatch,
+          DF_Treat.Runs=DF_Treat.Runs, Npar.Runs=Npar.Runs,
+          LOF.Runs=LOF.Runs, PE.Runs=PE.Runs,
+          total.Runs=N-(total.Oven+total.Batch+total.OvenBatch+1),
+          total=N-1)
+  return(df)
+}
+
+# Function to calculate D_S and A_S values for given variance component ratios
+efficiencyAD <- function(design, K, Z1, Z2, Z3, model, Npar, sigma)
+{
+  W <- rep(1,Npar)   # weigths for the terms in the polynomial model
+  W[(K+1):(2*K)] <- 0.25    # weights for quadratic terms
+  W <- W/sum(W)
+  design <- as.data.frame(design)
+  res <- numeric(0)
+  for(i in 1:nrow(sigma)){
+    sig <- sigma[i,]
+    V <- diag(rep(1,N))+sig[1]*(Z1%*%t(Z1))+sig[2]*Z2%*%t(Z2)+sig[3]*Z3%*%t(Z3)
+    X <- model.matrix(model, data=design, keep.order=TRUE)
+    Vi <- solve(V)
+    V <- solve(t(X)%*%Vi%*%X) # 
+    d <- exp(sum(log(round(eigen(V[-1,-1], symmetric=TRUE, 
+                                 only.values=TRUE)$values, 6)))/Npar)
+    v <- sum(W*matrix(diag(V)[-1],nc=1))/sum(W)
+    res <- rbind(res,c(d,v))
+  }
+  colnames(res) <- c("D", "A")
+  return(res)
+}
+```
+
+```{r}
+K <- 5   # Total number of factors
+m1 <- 10 # Ovens
+m2 <- 3  # Batches
+b <- m1*m2
+bsize <- 2
+design.Z <- data.frame(oven=factor(rep(1:m1, rep(m2*bsize,m1))), 
+                       batch=factor(rep(rep(1:m2,rep(bsize,m2)),m1)), 
+                       oven.batch=factor(rep(1:b,rep(bsize,b))))
+Z1 <- model.matrix(~-1+oven, data=design.Z)
+Z2 <- model.matrix(~-1+batch, data=design.Z) 
+Z3 <- model.matrix(~-1+oven.batch, data=design.Z)                                                   
+N <- b*bsize
+# Approximating model in all strata
+model <- formula(~ X1+X2+X3+X4+X5+I(X1^2)+I(X2^2)+I(X3^2)+I(X4^2)+I(X5^2)+X1:X2+
+                   X1:X3+X1:X4+X1:X5+X2:X3+X2:X4+X2:X5+X3:X4+X3:X5+X4:X5)
+Npar <- length(attr(terms(model), "term.labels")) 
+
+# Approximating model in the lower stratum (Runs)
+model.Runs <- formula(~X3+X4+X5+I(X3^2)+I(X4^2)+I(X5^2)+
+                    X1:X3+X1:X4+X1:X5+X2:X3+X2:X4+X2:X5+X3:X4+X3:X5+X4:X5)
+Npar.Runs <- length(attr(terms(model.Runs), "term.labels"))
+```
+
+
+```{r, warning=FALSE}
+library(Matrix)
+library(readr)
+library(dplyr, warn.conflicts = FALSE)
+library(digest)
+library(xtable)
+library(ggplot2)
+
+# read design D* (csv file, should give the path)
+jmp <- read_delim("EX3_JMP.csv", show_col_types = FALSE)
+jmp <- jmp[,-c(1,2)]
+df_jmp <- suppressWarnings(anovaDF(jmp, design.Z, Z1, Z2, Z3, Npar, Npar.Runs))
+```
+
+```{r}
+# load the MSS designs
+load("MSS_D.RData")
+d <- MSS_D$Xopt[,-c(1,2)]
+df_D <- suppressWarnings(anovaDF(d, design.Z, Z1, Z2, Z3, Npar, Npar.Runs))
+load("MSS_DP.RData")
+dp <- MSS_DP$Xopt[,-c(1,2)]
+df_DP <- suppressWarnings(anovaDF(dp, design.Z, Z1, Z2, Z3, Npar, Npar.Runs))
+load("MSS_CP.RData")
+cp <- MSS_CP$Xopt[,-c(1,2)]
+df_CP <- suppressWarnings(anovaDF(cp, design.Z, Z1, Z2, Z3, Npar, Npar.Runs))
+```
+
+\setcounter{table}{2}
+```{r, results='asis', echo=FALSE}
+# results
+source <- data.frame(names(df_jmp))
+tab <- data.frame(t(rbind(df_jmp, df_D, df_DP, df_CP)))
+row.names(tab) <- NULL
+tab <- cbind(source, tab)
+xtable_tab3 <- xtable(tab, digits=0, caption="Skeleton ANOVA of designs for Example 3")
+colnames(xtable_tab3) <- c("Source", "D*", "MSSD","MSSDP","MSSCP")
+print(xtable_tab3, caption.placement = "top", 
+      sanitize.colnames.function = identity,
+      hline.after = c(-1, 0, 6, 9, 12, 18), include.rownames = FALSE, 
+      comment = FALSE)
+```
+\setcounter{table}{5}
+\captionsetup[table]{labelformat=S}
+```{r, results='asis'}
+# Efficiencies 
+sig <- scan(text="1 10 100",what=double())
+Sigma <- expand.grid(sig, sig, sig)
+Sigma <- Sigma[order(Sigma[,1],Sigma[,2],Sigma[,3]),]
+sigma <- as.matrix(Sigma)
+colnames(sigma) <- NULL
+eff.jmp <- efficiencyAD(jmp, K, Z1, Z2, Z3, model, Npar, sigma)
+eff.D <- efficiencyAD(d, K, Z1, Z2, Z3, model, Npar, sigma)
+eff.DP <- efficiencyAD(dp, K, Z1, Z2, Z3, model, Npar, sigma)
+eff.CP <- efficiencyAD(cp, K, Z1, Z2, Z3, model, Npar, sigma)
+eff <- cbind(eff.jmp, eff.D, eff.DP, eff.CP)
+even_indexes<- seq(2,ncol(eff),2)
+odd_indexes<- seq(1,ncol(eff),2)
+resA <- eff[,even_indexes]
+resD <- eff[,odd_indexes]
+effD <- round(100*matrix(rep(resD[,2],ncol(resD)),nc=ncol(resD))/resD,2)
+effD <- effD[,-2]
+effA <- round(100*matrix(rep(resA[,2],ncol(resA)),nc=ncol(resA))/resA,2)
+effA <- effA[,-2]
+tab <- cbind(Sigma,e1=NA, effD, e2=NA, effA)
+xtable_tabF <- xtable(tab, digits=c(0, 0, 0, 0, 2, 2, 2, 2, 2, 2, 2, 2),
+                      caption = "Ds- and Aw-efficiencies, 
+                      relative to the best fixed-effects D design obtained, 
+                      given vc ratios, for designs for Example 3.")
+colnames(xtable_tabF) <- c("eta1", "eta2", "eta3", "", "D*", "MSSDP", "MSSCP","",
+                           "D*", "MSSDP", "MSSCP")
+print(xtable_tabF, caption.placement = "top", include.rownames = FALSE, 
+      comment = FALSE,
+      add.to.row = list(pos = list(-1), 
+      command = c("\\multicolumn{3}{c}{}&&\\multicolumn{3}{c}{Ds}&&
+              \\multicolumn{3}{c}{Aw} \\\\  \n")))
+```
+\setcounter{figure}{5}
+```{r, warning=FALSE, echo=FALSE, fig.cap="Ds- and Aw-efficiencies, relative to the MSSD design, as function of variance component ratios for designs for Example 3."}
+# Combine and filter data
+d1 <- data.frame(crit = "D", eta1 = log10(Sigma[,1]), eta2 = log10(Sigma[,2]),
+                 eta3 = Sigma[,3], Design = factor(rep(c("D*", "MSSDP", "MSSCP"), 
+                                                       rep(27, 3))), 
+                 eff = c(effD))
+d2 <- data.frame(crit = "A", eta1 = log10(Sigma[,1]), eta2 = log10(Sigma[,2]),
+                 eta3 = Sigma[,3], Design = factor(rep(c("D*", "MSSDP", "MSSCP"), 
+                                                       rep(27, 3))),
+                 eff = c(effA))
+d <- rbind(d1, d2)
+d <- d[d[,3] == 0,]
+
+# Set factor levels to control legend order
+d$crit <- factor(d$crit, levels = c("D", "A"),
+                 labels = c(expression(paste(D[S])),
+                            expression(paste(A[w]))))
+
+d$Design <- factor(d$Design, levels = c("D*", "MSSDP", "MSSCP"))
+
+
+custom_colors <- c("D*" = "green", "MSSDP" = "pink", "MSSCP" = "black")
+custom_shapes <- c("D*" = 8, "MSSDP" = 15, "MSSCP" = 19)
+
+labels <- c(
+  "D*" = "D*",
+  "MSSDP" = expression(MSS["(DP)"[S]]),
+  "MSSCP" = expression(MSS[CP[kappa]])
+)
+
+p <- ggplot(d, aes(log10(eta3), eff, group = interaction(eta1, Design), 
+                   color = Design, shape=Design,linetype = factor(eta1))) + 
+  facet_wrap(~crit, labeller = label_parsed) + 
+  geom_point(size=2.5) +
+  geom_line() + 
+  scale_shape_manual(values = custom_shapes, labels = labels) +
+  scale_color_manual(values = custom_colors, labels = labels) +
+  labs(title = "", x = expression(log[10](eta[Ovens*paste("*")*Batches])), 
+       y = "Efficiency") + 
+  scale_x_continuous(breaks = unique(log10(d$eta3))) + 
+  guides(color = guide_legend(title = "Design: ", order=1), 
+         shape = guide_legend(title = "Design: ", order=1),
+         linetype = guide_legend(title = expression(log[10](eta[Ovens])*": ")), 
+         order=2) + 
+  theme(axis.line = element_line(colour = "black"), 
+        panel.background = element_blank(), 
+        legend.key = element_rect(fill = "transparent", color = NA),
+        strip.background = element_rect(colour = NA, fill = NA),
+        plot.background = element_rect(fill = NA, color = NA),
+        legend.background = element_rect(fill = "transparent", color = NA),
+        legend.box.background = element_rect(fill = "transparent", color = NA),
+        axis.title.x = element_text(size = 14),
+        axis.title.y = element_text(size = 14),
+        axis.text = element_text(size = 14),
+        legend.text = element_text(size = 8),
+        legend.title = element_text(size = 8),
+        strip.text = element_text(size = 8),
+        legend.key.size = unit(1.2, "lines"),
+        legend.spacing.x = unit(1, "cm"),
+        legend.position = "bottom"
+  )
+p
+```
+
+
+
